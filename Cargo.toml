@@ -8,3 +8,4 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.66"
 crossbeam-deque = "0.8.2"
+crossbeam-utils = "0.8.12"
