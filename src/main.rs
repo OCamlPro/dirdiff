@@ -3,6 +3,8 @@ use anyhow::Context;
 use clap::Parser;
 use crossbeam_deque::{Steal, Stealer, Worker};
 use crossbeam_utils::Backoff;
+use std::fs::read_link;
+use std::sync::atomic::AtomicBool;
 use std::{
     ffi::OsString,
     fs::{read_dir, File},
@@ -58,17 +60,19 @@ enum Diff {
 }
 
 trait DiffHandler {
-    fn process(&mut self, root1: &Path, root2: &Path, diff: Diff);
+    fn process(&self, root1: &Path, root2: &Path, diff: Diff);
+
+    fn warn_symlink(&self);
 }
 struct DirWorker<H: DiffHandler> {
     root1: PathBuf,
     root2: PathBuf,
     stack: StackHandle,
-    diff_handler: H,
+    diff_handler: Arc<H>,
 }
 
 impl<H: DiffHandler> DirWorker<H> {
-    fn new(root1: PathBuf, root2: PathBuf, diff_handler: H, stack: StackHandle) -> Self {
+    fn new(root1: PathBuf, root2: PathBuf, diff_handler: Arc<H>, stack: StackHandle) -> Self {
         Self {
             root1,
             root2,
@@ -165,9 +169,10 @@ impl<H: DiffHandler> DirWorker<H> {
                         p.push(e1.file_name());
                         self.push_to_stack(p);
                     } else if ft1.is_symlink() {
-                        // todo!("Symlink are not currently handled")
-                        //TODO(Arthur): better
-                        continue;
+                        self.diff_handler.warn_symlink();
+                        if read_link(e1.path())? != read_link(e2.path())? {
+                            self.process_diff(Diff::Different(dir.clone(), e1.file_name()));
+                        }
                     } else if ft1.is_file() {
                         let same_content = if e1.metadata()?.len() != e2.metadata()?.len() {
                             false
@@ -207,17 +212,20 @@ impl<H: DiffHandler> DirWorker<H> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct GrepableHandler {}
+struct GrepableHandler {
+    warned_symlink: AtomicBool,
+}
 
 impl GrepableHandler {
     fn new() -> Self {
-        Self {}
+        Self {
+            warned_symlink: AtomicBool::new(false),
+        }
     }
 }
 
 impl DiffHandler for GrepableHandler {
-    fn process(&mut self, _root1: &Path, _root2: &Path, diff: Diff) {
+    fn process(&self, _root1: &Path, _root2: &Path, diff: Diff) {
         let (diff_type, mut p, file) = match diff {
             Diff::Different(dir, file) => ("Files differ", dir, file),
             Diff::InDir1Only(dir, file) => ("Present in first dir. only", dir, file),
@@ -225,6 +233,16 @@ impl DiffHandler for GrepableHandler {
         };
         p.push(file);
         println!("[{}]\t{:?}", diff_type, p.display());
+    }
+
+    fn warn_symlink(&self) {
+        if !self.warned_symlink.swap(true, Ordering::SeqCst) {
+            eprintln!(
+                "[warning!] A symlink was detected. \
+                Be advised that symlink are only checked for equality of their \
+                target and not processed recursively."
+            )
+        }
     }
 }
 
@@ -244,12 +262,13 @@ fn main() -> anyhow::Result<()> {
             .context("Could not determine available parallelisme, specify the -j option")?
             .get() as _,
     };
-    let h = GrepableHandler::new();
+    let h = Arc::new(GrepableHandler::new());
     let stack_handlers = StackHandle::new(n_threads);
     let mut first = true;
     let mut joins = Vec::new();
     for sh in stack_handlers {
-        let mut worker = DirWorker::new(cli_args.dir1.clone(), cli_args.dir2.clone(), h, sh);
+        let mut worker =
+            DirWorker::new(cli_args.dir1.clone(), cli_args.dir2.clone(), h.clone(), sh);
         if first {
             worker.push_to_stack(PathBuf::new());
             first = false;
