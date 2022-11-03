@@ -57,6 +57,7 @@ enum Diff {
     InDir1Only(PathBuf, OsString),
     InDir2Only(PathBuf, OsString),
     Different(PathBuf, OsString),
+    SameButDifferentMTime(PathBuf, OsString),
 }
 
 trait DiffHandler {
@@ -69,15 +70,23 @@ struct DirWorker<H: DiffHandler> {
     root2: PathBuf,
     stack: StackHandle,
     diff_handler: Arc<H>,
+    check_mtime: bool,
 }
 
 impl<H: DiffHandler> DirWorker<H> {
-    fn new(root1: PathBuf, root2: PathBuf, diff_handler: Arc<H>, stack: StackHandle) -> Self {
+    fn new(
+        root1: PathBuf,
+        root2: PathBuf,
+        diff_handler: Arc<H>,
+        stack: StackHandle,
+        check_mtime: bool,
+    ) -> Self {
         Self {
             root1,
             root2,
             stack,
             diff_handler,
+            check_mtime,
         }
     }
 
@@ -196,6 +205,13 @@ impl<H: DiffHandler> DirWorker<H> {
                         };
                         if !same_content {
                             self.process_diff(Diff::Different(dir.clone(), e1.file_name()));
+                        } else if self.check_mtime
+                            && (e1.metadata()?.modified()? != e2.metadata()?.modified()?)
+                        {
+                            self.process_diff(Diff::SameButDifferentMTime(
+                                dir.clone(),
+                                e1.file_name(),
+                            ));
                         }
                     } else {
                         let mut p = dir;
@@ -230,6 +246,7 @@ impl DiffHandler for GrepableHandler {
             Diff::Different(dir, file) => ("Files differ", dir, file),
             Diff::InDir1Only(dir, file) => ("Present in first dir. only", dir, file),
             Diff::InDir2Only(dir, file) => ("Present in second dir. only", dir, file),
+            Diff::SameButDifferentMTime(dir, file) => ("Differ by mtime only", dir, file),
         };
         p.push(file);
         println!("[{}]\t{:?}", diff_type, p.display());
@@ -263,6 +280,12 @@ struct CliArgs {
     ///
     /// Use 0 or no option for auto-detection.
     jobs: Option<u16>,
+    /// Whether to check if the mtime is different.
+    ///
+    /// Only applies to file whose content is otherwise the same,
+    /// and gets its specific output tag: `[Differ by mtime only]`.
+    #[arg(long)]
+    check_mtime: bool,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -278,8 +301,13 @@ fn main() -> anyhow::Result<()> {
     let mut first = true;
     let mut joins = Vec::new();
     for sh in stack_handlers {
-        let mut worker =
-            DirWorker::new(cli_args.dir1.clone(), cli_args.dir2.clone(), h.clone(), sh);
+        let mut worker = DirWorker::new(
+            cli_args.dir1.clone(),
+            cli_args.dir2.clone(),
+            h.clone(),
+            sh,
+            cli_args.check_mtime,
+        );
         if first {
             worker.push_to_stack(PathBuf::new());
             first = false;

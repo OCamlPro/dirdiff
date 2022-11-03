@@ -23,6 +23,11 @@ Options:
 
           Use 0 or no option for auto-detection.
 
+      --check-mtime
+          Whether to check if the mtime is different.
+
+          Only applies to file whose content is otherwise the same, and gets its specific output tag: `[Differ by mtime only]`.
+
   -h, --help
           Print help information (use `-h` for a summary)
 
