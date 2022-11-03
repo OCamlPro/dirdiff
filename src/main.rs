@@ -246,11 +246,22 @@ impl DiffHandler for GrepableHandler {
     }
 }
 
+/// Output the diff of two directories.
+///
+/// Intended to be efficient and usable on very large directories.
+///
+/// Not intended to output the diff of files' content.
 #[derive(Debug, Parser)]
+#[command(author, version)]
 struct CliArgs {
+    /// First directory to diff from.
     dir1: PathBuf,
+    /// Second directory to diff from.
     dir2: PathBuf,
-    #[clap(short, long)]
+    #[arg(short, long)]
+    /// Number of parallel threads to use.
+    ///
+    /// Use 0 or no option for auto-detection.
     jobs: Option<u16>,
 }
 
