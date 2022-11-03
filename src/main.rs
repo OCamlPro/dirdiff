@@ -257,9 +257,9 @@ struct CliArgs {
 fn main() -> anyhow::Result<()> {
     let cli_args: CliArgs = CliArgs::parse();
     let n_threads = match cli_args.jobs {
-        Some(u) => u,
-        None => thread::available_parallelism()
-            .context("Could not determine available parallelisme, specify the -j option")?
+        Some(u) if u > 0 => u,
+        _ => thread::available_parallelism()
+            .context("Could not determine available parallelisme, specify the -j option with a non zero value.")?
             .get() as _,
     };
     let h = Arc::new(GrepableHandler::new());
