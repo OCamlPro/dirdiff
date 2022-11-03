@@ -1,4 +1,6 @@
 use anyhow::bail;
+use anyhow::Context;
+use clap::Parser;
 use crossbeam_deque::{Steal, Stealer, Worker};
 use crossbeam_utils::Backoff;
 use std::{
@@ -58,27 +60,21 @@ enum Diff {
 trait DiffHandler {
     fn process(&mut self, root1: &Path, root2: &Path, diff: Diff);
 }
-struct DirWorker<'root, H: DiffHandler> {
-    root1: &'root Path,
-    root2: &'root Path,
+struct DirWorker<H: DiffHandler> {
+    root1: PathBuf,
+    root2: PathBuf,
     stack: StackHandle,
     diff_handler: H,
 }
 
-impl<'root, H: DiffHandler> DirWorker<'root, H> {
-    fn new<P: AsRef<Path>>(
-        root1: &'root P,
-        root2: &'root P,
-        diff_handler: H,
-        stack: StackHandle,
-    ) -> Self {
-        let w = Self {
-            root1: root1.as_ref(),
-            root2: root2.as_ref(),
+impl<H: DiffHandler> DirWorker<H> {
+    fn new(root1: PathBuf, root2: PathBuf, diff_handler: H, stack: StackHandle) -> Self {
+        Self {
+            root1,
+            root2,
             stack,
             diff_handler,
-        };
-        w
+        }
     }
 
     fn run(&mut self) -> anyhow::Result<()> {
@@ -114,7 +110,7 @@ impl<'root, H: DiffHandler> DirWorker<'root, H> {
     }
 
     fn process_diff(&mut self, diff: Diff) {
-        self.diff_handler.process(self.root1, self.root2, diff)
+        self.diff_handler.process(&self.root1, &self.root2, diff)
     }
 
     fn push_to_stack(&mut self, dir: PathBuf) {
@@ -123,8 +119,8 @@ impl<'root, H: DiffHandler> DirWorker<'root, H> {
 
     fn process_path(&mut self, dir: PathBuf) -> anyhow::Result<()> {
         // dbg!(&dir);
-        let dir1 = PathBuf::from_iter([self.root1, &dir]);
-        let dir2 = PathBuf::from_iter([self.root2, &dir]);
+        let dir1 = PathBuf::from_iter([&self.root1, &dir]);
+        let dir2 = PathBuf::from_iter([&self.root2, &dir]);
         let mut dir_content1 = read_dir(&dir1)?.collect::<Result<Vec<_>, _>>()?;
         let mut dir_content2 = read_dir(&dir2)?.collect::<Result<Vec<_>, _>>()?;
         // Put dir first to minimize time spent with an empty stack
@@ -232,18 +228,28 @@ impl DiffHandler for GrepableHandler {
     }
 }
 
+#[derive(Debug, Parser)]
+struct CliArgs {
+    dir1: PathBuf,
+    dir2: PathBuf,
+    #[clap(short, long)]
+    jobs: Option<u16>,
+}
+
 fn main() -> anyhow::Result<()> {
+    let cli_args: CliArgs = CliArgs::parse();
+    let n_threads = match cli_args.jobs {
+        Some(u) => u,
+        None => thread::available_parallelism()
+            .context("Could not determine available parallelisme, specify the -j option")?
+            .get() as _,
+    };
     let h = GrepableHandler::new();
-    let stack_handlers = StackHandle::new(8);
+    let stack_handlers = StackHandle::new(n_threads);
     let mut first = true;
     let mut joins = Vec::new();
     for sh in stack_handlers {
-        let mut worker = DirWorker::new(
-            &"/home/arthur/mozilla-unified/",         //obj-x86_64-pc-linux-gnu/
-            &"/home/arthur/worktrees/common_target/", //obj-x86_64-pc-linux-gnu/
-            h,
-            sh,
-        );
+        let mut worker = DirWorker::new(cli_args.dir1.clone(), cli_args.dir2.clone(), h, sh);
         if first {
             worker.push_to_stack(PathBuf::new());
             first = false;
