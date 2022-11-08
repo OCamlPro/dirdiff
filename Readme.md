@@ -1,11 +1,44 @@
+[![github release badge badge](https://img.shields.io/github/v/release/OCamlPro/dirdiff?style=flat-square)](https://github.com/OCamlPro/dirdiff/releases/latest)
+![github downloads badge](https://img.shields.io/github/downloads/OCamlPro/dirdiff/total?style=flat-square)
+
 Dirdiff
 =======
 
-Efficiently compute the differences between two directories.
+Dirdiff efficiently computes the differences between two directories. It lists files that either:
 
-Intended to work on large directories.
+1. exist only in one of the directories, or
+2. exist in both directories but with different content.
 
-Not intended to display the diff of the files' content.
+Dirdiff is intended to work on large directories (using multi-threading), and by not trying to display the diff of the files' content.
+
+Installation
+------------
+
+## Released binary
+
+Precompiled binaries for (relatively recent) Linux/amd64 are available for every tagged [release](https://github.com/OCamlPro/dirdiff/releases).
+
+## Install (by compiling from sources) using cargo
+
+```
+cargo install --git 'https://github.com/OCamlPro/dirdiff'
+```
+
+## Building
+
+Dirdiff is written in Rust. To build it you will need to have the rust toolchain installed. 
+
+Once you have obtained the source, the following command will build the binary and put it in the root directory of the repo.
+
+```bash
+cd dirdiff/
+cargo build --release
+# Copy the binary to the root of the repo
+mv target/release/dirdiff dirdiff
+```
+
+Usage
+-----
 
 ```
 Usage: dirdiff [OPTIONS] <DIR1> <DIR2>
@@ -34,3 +67,16 @@ Options:
   -V, --version
           Print version information
 ```
+
+Sample output
+-------------
+
+Columns are tab separated
+
+```
+[Files differ]	"foo/bar"
+[Present in first dir. only]	"subdir_a"
+[Present in second dir. only]	"subdir_b"
+```
+
+The diff is outputted to `stdout`. If symlinks are encountered, a warning will be displayed on `stderr`.
