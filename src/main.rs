@@ -288,6 +288,17 @@ struct CliArgs {
     /// and gets its specific output tag: `[Differ by mtime only]`.
     #[arg(long)]
     check_mtime: bool,
+    /// Whether to follow symlinks when comparing directories' content
+    #[arg(short = 'L', long)]
+    follow_symlink: bool,
+    /// Whether to follow symlinks for program's arguments.
+    #[arg(short = 'H')]
+    follow_symlink_args: bool,
+}
+
+fn unwind_path(path: PathBuf) -> anyhow::Result<PathBuf> {
+    path.canonicalize()
+        .context(format!("Couldn't unwind path {}.", path.display()))
 }
 
 fn main() -> anyhow::Result<()> {
@@ -302,10 +313,15 @@ fn main() -> anyhow::Result<()> {
     let stack_handlers = StackHandle::new(n_threads);
     let mut first = true;
     let mut joins = Vec::new();
+    let (dir1, dir2) = if cli_args.follow_symlink_args {
+        (unwind_path(cli_args.dir1)?, unwind_path(cli_args.dir2)?)
+    } else {
+        (cli_args.dir1, cli_args.dir2)
+    };
     for sh in stack_handlers {
         let mut worker = DirWorker::new(
-            cli_args.dir1.clone(),
-            cli_args.dir2.clone(),
+            dir1.clone(),
+            dir2.clone(),
             h.clone(),
             sh,
             cli_args.check_mtime,
