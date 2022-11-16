@@ -48,9 +48,7 @@ commit_parsers = [
     { message = "^refactor", group = "Refactor"},
     { message = "^style", group = "Styling"},
     { message = "^test", group = "Testing"},
-    { message = "^chore\\(release\\): prepare for", skip = true},
-    { message = "^chore\\(meta\\):", skip = true},
-    { message = "^chore", group = "Miscellaneous Tasks"},
+    { message = "^chore", skip = true},
     { body = ".*security", group = "Security"},
 ]
 # filter out the commits that are not matched by commit parsers
