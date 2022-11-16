@@ -155,7 +155,9 @@ impl<H: DiffHandler> DirWorker<H> {
             }
             let e1 = dir_content1.last().unwrap();
             let e2 = dir_content2.last().unwrap();
-            match e1.file_name().cmp(&e2.file_name()) {
+            let e1_not_dir = !e1.file_type().unwrap().is_dir();
+            let e2_not_dir = !e2.file_type().unwrap().is_dir();
+            match (e1_not_dir, e1.file_name()).cmp(&(e2_not_dir, e2.file_name())) {
                 std::cmp::Ordering::Less => {
                     let e = dir_content2.pop().unwrap();
                     self.process_diff(Diff::InDir2Only(dir.clone(), e.file_name()));
