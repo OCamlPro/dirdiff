@@ -3,8 +3,8 @@ use anyhow::Context;
 use clap::Parser;
 use crossbeam_deque::{Steal, Stealer, Worker};
 use crossbeam_utils::Backoff;
-use std::fs::read_link;
-use std::sync::atomic::AtomicBool;
+use std::fs::canonicalize;
+use std::fs::{read_link, FileType, Metadata};
 use std::{
     ffi::OsString,
     fs::{read_dir, File},
@@ -16,6 +16,7 @@ use std::{
     },
     thread,
 };
+
 struct StackUnit {
     dir: PathBuf,
 }
@@ -62,15 +63,15 @@ enum Diff {
 
 trait DiffHandler {
     fn process(&self, root1: &Path, root2: &Path, diff: Diff);
-
-    fn warn_symlink(&self);
 }
+
 struct DirWorker<H: DiffHandler> {
     root1: PathBuf,
     root2: PathBuf,
     stack: StackHandle,
     diff_handler: Arc<H>,
     check_mtime: bool,
+    follow_symlink: bool,
 }
 
 impl<H: DiffHandler> DirWorker<H> {
@@ -80,6 +81,7 @@ impl<H: DiffHandler> DirWorker<H> {
         diff_handler: Arc<H>,
         stack: StackHandle,
         check_mtime: bool,
+        follow_symlink: bool,
     ) -> Self {
         Self {
             root1,
@@ -87,6 +89,7 @@ impl<H: DiffHandler> DirWorker<H> {
             stack,
             diff_handler,
             check_mtime,
+            follow_symlink,
         }
     }
 
@@ -130,66 +133,111 @@ impl<H: DiffHandler> DirWorker<H> {
         self.stack.own.push(StackUnit { dir })
     }
 
+    fn file_name(path: &PathBuf) -> OsString {
+        path.file_name().unwrap().to_owned()
+    }
+
+    fn file_type_order(ft: FileType) -> u8 {
+        match ft {
+            _ if ft.is_dir() => 0,
+            _ if ft.is_symlink() => 1,
+            _ if ft.is_file() => 2,
+            _ => 3,
+        }
+    }
+
+    fn file_type(&self, path: &PathBuf) -> FileType {
+        self.metadata(path).file_type()
+    }
+
+    fn metadata(&self, path: &PathBuf) -> Metadata {
+        if self.follow_symlink || !path.is_symlink() {
+            path.metadata().unwrap()
+        } else {
+            path.symlink_metadata().unwrap()
+        }
+    }
+
+    fn unwind_if_link(&self, path: PathBuf) -> anyhow::Result<PathBuf> {
+        if path.is_symlink() && self.follow_symlink {
+            canonicalize(&path).context(format!("Error while following link {}", path.display()))
+        } else {
+            Ok(path)
+        }
+    }
+
     fn process_path(&mut self, dir: PathBuf) -> anyhow::Result<()> {
         // dbg!(&dir);
         let dir1 = PathBuf::from_iter([&self.root1, &dir]);
         let dir2 = PathBuf::from_iter([&self.root2, &dir]);
-        let mut dir_content1 = read_dir(&dir1)?.collect::<Result<Vec<_>, _>>()?;
-        let mut dir_content2 = read_dir(&dir2)?.collect::<Result<Vec<_>, _>>()?;
+        let mut dir_content1 = read_dir(&dir1)?
+            .map(|r| r.map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut dir_content2 = read_dir(&dir2)?
+            .map(|r| r.map(|e| e.path()))
+            .collect::<Result<Vec<_>, _>>()?;
         // Put dir first to minimize time spent with an empty stack
         // in case work needs to be stollen by others
-        dir_content1.sort_unstable_by_key(|e| (!e.file_type().unwrap().is_dir(), e.file_name()));
-        dir_content2.sort_unstable_by_key(|e| (!e.file_type().unwrap().is_dir(), e.file_name()));
+        dir_content1.sort_unstable_by_key(|e| {
+            (Self::file_type_order(self.file_type(e)), Self::file_name(e))
+        });
+        dir_content2.sort_unstable_by_key(|e| {
+            (Self::file_type_order(self.file_type(e)), Self::file_name(e))
+        });
         loop {
             if dir_content1.is_empty() {
                 for e in dir_content2 {
-                    self.process_diff(Diff::InDir2Only(dir.clone(), e.file_name()))
+                    self.process_diff(Diff::InDir2Only(dir.clone(), Self::file_name(&e)))
                 }
                 return Ok(());
             }
             if dir_content2.is_empty() {
                 for e in dir_content1 {
-                    self.process_diff(Diff::InDir1Only(dir.clone(), e.file_name()))
+                    self.process_diff(Diff::InDir1Only(dir.clone(), Self::file_name(&e)))
                 }
                 return Ok(());
             }
-            let e1 = dir_content1.last().unwrap();
-            let e2 = dir_content2.last().unwrap();
-            let e1_not_dir = !e1.file_type().unwrap().is_dir();
-            let e2_not_dir = !e2.file_type().unwrap().is_dir();
-            match (e1_not_dir, e1.file_name()).cmp(&(e2_not_dir, e2.file_name())) {
+            let e1 = dir_content1.last().unwrap().clone();
+            let e2 = dir_content2.last().unwrap().clone();
+            let ord1 = Self::file_type_order(self.file_type(&e1));
+            let ord2 = Self::file_type_order(self.file_type(&e2));
+            match (ord1, Self::file_name(&e1)).cmp(&(ord2, Self::file_name(&e2))) {
                 std::cmp::Ordering::Less => {
                     let e = dir_content2.pop().unwrap();
-                    self.process_diff(Diff::InDir2Only(dir.clone(), e.file_name()));
+                    self.process_diff(Diff::InDir2Only(dir.clone(), Self::file_name(&e)));
                     continue;
                 }
                 std::cmp::Ordering::Greater => {
                     let e = dir_content1.pop().unwrap();
-                    self.process_diff(Diff::InDir1Only(dir.clone(), e.file_name()));
+                    self.process_diff(Diff::InDir1Only(dir.clone(), Self::file_name(&e)));
                     continue;
                 }
                 std::cmp::Ordering::Equal => {
+                    // Real file/directory name
                     let e1 = dir_content1.pop().unwrap();
                     let e2 = dir_content2.pop().unwrap();
-                    let ft1 = e1.file_type()?;
-                    let ft2 = e2.file_type()?;
+                    // If file is a symlink and flag -L is set then it is a target file/directory path. Otherwise e1 = e1_unwind
+                    let e1_unwind = self.unwind_if_link(e1.clone())?;
+                    let e2_unwind = self.unwind_if_link(e2.clone())?;
+                    // File type of unwinded file/directory
+                    let ft1 = self.file_type(&e1_unwind);
+                    let ft2 = self.file_type(&e2_unwind);
                     if ft1 != ft2 {
-                        self.process_diff(Diff::Different(dir.clone(), e1.file_name()));
+                        self.process_diff(Diff::Different(dir.clone(), Self::file_name(&e1)));
                     } else if ft1.is_dir() {
                         let mut p = dir.clone();
-                        p.push(e1.file_name());
+                        p.push(Self::file_name(&e1));
                         self.push_to_stack(p);
                     } else if ft1.is_symlink() {
-                        self.diff_handler.warn_symlink();
-                        if read_link(e1.path())? != read_link(e2.path())? {
-                            self.process_diff(Diff::Different(dir.clone(), e1.file_name()));
+                        if read_link(&e1)? != read_link(&e2)? {
+                            self.process_diff(Diff::Different(dir.clone(), Self::file_name(&e1)));
                         }
                     } else if ft1.is_file() {
-                        let same_content = if e1.metadata()?.len() != e2.metadata()?.len() {
+                        let same_content = if self.metadata(&e1).len() != self.metadata(&e2).len() {
                             false
                         } else {
-                            let mut f1 = BufReader::new(File::open(e1.path())?);
-                            let mut f2 = BufReader::new(File::open(e2.path())?);
+                            let mut f1 = BufReader::new(File::open(&e1_unwind)?);
+                            let mut f2 = BufReader::new(File::open(&e2_unwind)?);
                             loop {
                                 let s1 = f1.fill_buf()?;
                                 let s2 = f2.fill_buf()?;
@@ -206,18 +254,21 @@ impl<H: DiffHandler> DirWorker<H> {
                             }
                         };
                         if !same_content {
-                            self.process_diff(Diff::Different(dir.clone(), e1.file_name()));
+                            self.process_diff(Diff::Different(
+                                dir.clone(),
+                                Self::file_name(&e1_unwind),
+                            ));
                         } else if self.check_mtime
-                            && (e1.metadata()?.modified()? != e2.metadata()?.modified()?)
+                            && (self.metadata(&e1).modified()? != self.metadata(&e2).modified()?)
                         {
                             self.process_diff(Diff::SameButDifferentMTime(
                                 dir.clone(),
-                                e1.file_name(),
+                                Self::file_name(&e1_unwind),
                             ));
                         }
                     } else {
                         let mut p = dir;
-                        p.push(e1.file_name());
+                        p.push(Self::file_name(&e1));
                         bail!(
                             "Unimplemented filetype. File {} has type {:?}",
                             p.display(),
@@ -230,15 +281,11 @@ impl<H: DiffHandler> DirWorker<H> {
     }
 }
 
-struct GrepableHandler {
-    warned_symlink: AtomicBool,
-}
+struct GrepableHandler;
 
 impl GrepableHandler {
     fn new() -> Self {
-        Self {
-            warned_symlink: AtomicBool::new(false),
-        }
+        Self
     }
 }
 
@@ -252,16 +299,6 @@ impl DiffHandler for GrepableHandler {
         };
         p.push(file);
         println!("[{}]\t{:?}", diff_type, p.display());
-    }
-
-    fn warn_symlink(&self) {
-        if !self.warned_symlink.swap(true, Ordering::SeqCst) {
-            eprintln!(
-                "[warning!] A symlink was detected. \
-                Be advised that symlink are only checked for equality of their \
-                target and not processed recursively."
-            )
-        }
     }
 }
 
@@ -296,12 +333,11 @@ struct CliArgs {
     follow_symlink_args: bool,
 }
 
-fn unwind_path(path: PathBuf) -> anyhow::Result<PathBuf> {
-    path.canonicalize()
-        .context(format!("Couldn't unwind path {}.", path.display()))
-}
-
 fn main() -> anyhow::Result<()> {
+    let unwind_path = |path: PathBuf| {
+        path.canonicalize()
+            .context(format!("Couldn't unwind path {}.", path.display()))
+    };
     let cli_args: CliArgs = CliArgs::parse();
     let n_threads = match cli_args.jobs {
         Some(u) if u > 0 => u,
@@ -325,6 +361,7 @@ fn main() -> anyhow::Result<()> {
             h.clone(),
             sh,
             cli_args.check_mtime,
+            cli_args.follow_symlink,
         );
         if first {
             worker.push_to_stack(PathBuf::new());
