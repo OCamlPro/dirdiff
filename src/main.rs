@@ -1,3 +1,67 @@
+//! # Dirdiff
+//!
+//! ## Symbolic links handling
+//!
+//! By default, **dirdiff** treats symbolic links as a third file type along with regular files and directories.
+//! A symbolic link can only be equal to another symbolic link that has the same name and points to files with the
+//! same name and location relative to the link itself. At this stage link couldn't be compared to other files
+//! or directories.
+//!
+//! **For example:**
+//! ```
+//! dir1/
+//! |---link(&a/file)
+//! |---a/
+//! |   |--- file
+//!
+//! dir2/
+//! |---link(&a/file)
+//! |---b/
+//! |---a/
+//! |   |--- file
+//!
+//! ```
+//! Here symlink that has name *link* in both directories are considered equal, even if they points to two files with
+//! different content.
+//!
+//! When the *-L* option is passed, links are treated quite differently. Its literal meaning is "follow the links". Links are
+//! no longer a separate file type, but an imitation of their own target. That is, they are compared and processed with
+//! the same file types that they refer to. The name of the link is still used to compare against other files or other
+//! links as a first step in the comparison. If the link points to a file with the same content, even if the target
+//! names are different, then the link is equal to what it is compared to.
+//!
+//! **For example:**
+//! ```
+//! dir1/
+//! |---file(&a/target)
+//! |---a/
+//! |   |---target
+//!
+//! dir2/
+//! |---file
+//! ```
+//! Here symlink that has name *file* is equal to the file with the same name in *dir2* only if *dir1/a/target* and
+//! *dir2/file* have the same content. When dealing with directories, it verifies recursively their both contents.
+//!
+//! **For example:**
+//! ```
+//! dir1/
+//! |---src(&a/src)
+//! |---a/
+//! |   |---src
+//! |   |   |---file1
+//! |   |   |---file2
+//!
+//! dir2/
+//! |---src
+//! |   |---file1
+//! |   |---file2
+//! ```
+//! Here symlink that has name *src* is equal to directory with the same name. The files *file1* and *file2* are verified
+//! separately.
+//!
+//! When the *-H* option is passed, the program arguments are unwinded only if they contain a link.
+
 use anyhow::bail;
 use anyhow::Context;
 use clap::Parser;
@@ -21,6 +85,7 @@ struct StackUnit {
     dir: PathBuf,
 }
 
+/// Extraction of useful metadata for iterated files.
 #[derive(Debug)]
 struct FileT {
     entry: DirEntry,
@@ -28,7 +93,11 @@ struct FileT {
     path: Option<PathBuf>,
 }
 
-impl<'a> FileT {
+impl FileT {
+    /// Create new extraction from directory entry.
+    ///
+    /// It will check file type, and if [follow_link] flag is set and passed entry points to the symbolic link,
+    /// then path and type of target file are cached.
     fn new(entry: DirEntry, follow_link: bool) -> Self {
         let mut file_type = entry.file_type().unwrap();
         if follow_link && file_type.is_symlink() {
@@ -51,21 +120,25 @@ impl<'a> FileT {
         }
     }
 
-    fn file_type(&'a self) -> &'a FileType {
+    /// Returns file type of file
+    fn file_type(&self) -> &FileType {
         &self.file_type
     }
 
+    /// Returns file name. If structure contains symlink, then its name will be returned instead of its target name.
     fn filename(&self) -> OsString {
         self.entry.file_name()
     }
 
-    fn path(&'a mut self) -> &'a PathBuf {
+    /// Path to file. If structure contains symlink, then path to its target is returned at constant time.
+    fn path(&mut self) -> &PathBuf {
         if let None = &self.path {
             self.path = Some(self.entry.path());
         }
         self.path.as_ref().unwrap()
     }
 
+    /// Ordering files by their types
     fn file_type_order(&self) -> u8 {
         match self.file_type {
             ft if ft.is_dir() => 0,
@@ -75,6 +148,7 @@ impl<'a> FileT {
         }
     }
 
+    /// Metadata of the file. If structure contains symlink, then metadata to its target is returned.
     fn metadata(&self) -> Metadata {
         match &self.path {
             Some(p) => p.metadata().unwrap(),
@@ -198,10 +272,8 @@ impl<H: DiffHandler> DirWorker<H> {
 
     fn process_path(&mut self, dir: PathBuf) -> anyhow::Result<()> {
         // dbg!(&dir);
-        //println!("1 Start processing {:?}", dir);
         let dir1 = PathBuf::from_iter([&self.root1, &dir]);
         let dir2 = PathBuf::from_iter([&self.root2, &dir]);
-        //println!("1.1 Looking up {:?} {:?}", dir1, dir2);
         let mut dir_content1 = read_dir(&dir1)?
             .map(|r| r.map(|e| FileT::new(e, self.follow_symlink)))
             .collect::<Result<Vec<_>, _>>()?;
@@ -210,26 +282,16 @@ impl<H: DiffHandler> DirWorker<H> {
             .collect::<Result<Vec<_>, _>>()?;
         // Put dir first to minimize time spent with an empty stack
         // in case work needs to be stollen by others
-        //println!("2 Ordering");
-
-        /* fn ord_f<'r>(e : &'r FileT) -> (u8,&'r OsString)  {
-            (e.file_type_order(), e.file_name())
-        }
-        dir_content1.sort_unstable_by_key(ord_f);
-        dir_content2.sort_unstable_by_key(ord_f); */
-
         dir_content1.sort_unstable_by_key(|e| (e.file_type_order(), e.filename()));
         dir_content2.sort_unstable_by_key(|e| (e.file_type_order(), e.filename()));
         loop {
             if dir_content1.is_empty() {
-                //println!("3 Dir1 is empty, dir2={:?}", dir_content2);
                 for e in dir_content2 {
                     self.process_diff(Diff::InDir2Only(dir.clone(), e.filename()))
                 }
                 return Ok(());
             }
             if dir_content2.is_empty() {
-                //println!("4 Dir2 is empty, dir1={:?}", dir_content1);
                 for e in dir_content1 {
                     self.process_diff(Diff::InDir1Only(dir.clone(), e.filename()))
                 }
@@ -239,48 +301,33 @@ impl<H: DiffHandler> DirWorker<H> {
             let e2 = dir_content2.last().unwrap();
             let ord1 = e1.file_type_order();
             let ord2 = e2.file_type_order();
-            //println!("5 Comparing {:?} and {:?}", e1.filename(), e2.filename());
             match (ord1, e1.filename()).cmp(&(ord2, e2.filename())) {
                 std::cmp::Ordering::Less => {
-                    //println!("6 Less");
                     let e = dir_content2.pop().unwrap();
                     self.process_diff(Diff::InDir2Only(dir.clone(), e.filename()));
                     continue;
                 }
                 std::cmp::Ordering::Greater => {
-                    //println!("6 Greater");
                     let e = dir_content1.pop().unwrap();
                     self.process_diff(Diff::InDir1Only(dir.clone(), e.filename()));
                     continue;
                 }
                 std::cmp::Ordering::Equal => {
-                    // Real file/directory name
-                    //println!("7 Equal");
                     let mut e1 = dir_content1.pop().unwrap();
                     let mut e2 = dir_content2.pop().unwrap();
-                    // If file is a symlink and flag -L is set then it is a target file/directory path. Otherwise e1 = e1_unwind
-
-                    /* let e1_unwind = self.unwind_if_link(&e1)?;
-                    let e2_unwind = self.unwind_if_link(&e2)?; */
-
-                    // File type of unwinded file/directory
                     let ft1 = e1.file_type();
                     let ft2 = e2.file_type();
                     if ft1 != ft2 {
-                        //println!("8 File types differs");
                         self.process_diff(Diff::Different(dir.clone(), e1.filename()));
                     } else if ft1.is_dir() {
-                        //println!("9 {:?} is a directory",e1.filename() );
                         let mut p = dir.clone();
                         p.push(e1.filename());
                         self.push_to_stack(p);
                     } else if ft1.is_symlink() {
-                        //println!("10 {:?} is a symlink",e1.filename() );
                         if read_link(e1.path())? != read_link(e2.path())? {
                             self.process_diff(Diff::Different(dir.clone(), e1.filename()));
                         }
                     } else if ft1.is_file() {
-                        //println!("11 {:?} is a file and {:?} ", e1, e2);
                         let e1_meta = e1.metadata();
                         let e2_meta = e2.metadata();
                         let same_content = if e1_meta.len() != e2_meta.len() {
