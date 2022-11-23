@@ -120,11 +120,6 @@ impl FileT {
         }
     }
 
-    /// Returns file type of file
-    fn file_type(&self) -> &FileType {
-        &self.file_type
-    }
-
     /// Returns file name. If structure contains symlink, then its name will be returned instead of its target name.
     fn filename(&self) -> OsString {
         self.entry.file_name()
@@ -315,57 +310,66 @@ impl<H: DiffHandler> DirWorker<H> {
                 std::cmp::Ordering::Equal => {
                     let mut e1 = dir_content1.pop().unwrap();
                     let mut e2 = dir_content2.pop().unwrap();
-                    let ft1 = e1.file_type();
-                    let ft2 = e2.file_type();
+                    let ft1 = e1.file_type_order();
+                    let ft2 = e2.file_type_order();
                     if ft1 != ft2 {
                         self.process_diff(Diff::Different(dir.clone(), e1.filename()));
-                    } else if ft1.is_dir() {
-                        let mut p = dir.clone();
-                        p.push(e1.filename());
-                        self.push_to_stack(p);
-                    } else if ft1.is_symlink() {
-                        if read_link(e1.path())? != read_link(e2.path())? {
-                            self.process_diff(Diff::Different(dir.clone(), e1.filename()));
-                        }
-                    } else if ft1.is_file() {
-                        let e1_meta = e1.metadata();
-                        let e2_meta = e2.metadata();
-                        let same_content = if e1_meta.len() != e2_meta.len() {
-                            false
-                        } else {
-                            let mut f1 = BufReader::new(File::open(e1.path())?);
-                            let mut f2 = BufReader::new(File::open(e2.path())?);
-                            loop {
-                                let s1 = f1.fill_buf()?;
-                                let s2 = f2.fill_buf()?;
-                                if s1.is_empty() {
-                                    break s2.is_empty();
-                                }
-                                let common_size = std::cmp::min(s1.len(), s2.len());
-                                if s1[..common_size] != s2[..common_size] {
-                                    break false;
-                                } else {
-                                    f1.consume(common_size);
-                                    f2.consume(common_size);
+                    } else {
+                        match ft1 {
+                            0 => {
+                                let mut p = dir.clone();
+                                p.push(e1.filename());
+                                self.push_to_stack(p);
+                            }
+                            1 => {
+                                if read_link(e1.path())? != read_link(e2.path())? {
+                                    self.process_diff(Diff::Different(dir.clone(), e1.filename()));
                                 }
                             }
-                        };
-                        if !same_content {
-                            self.process_diff(Diff::Different(dir.clone(), e1.filename()));
-                        } else if self.check_mtime && (e1_meta.modified()? != e2_meta.modified()?) {
-                            self.process_diff(Diff::SameButDifferentMTime(
-                                dir.clone(),
-                                e2.filename(),
-                            ));
+                            2 => {
+                                let e1_meta = e1.metadata();
+                                let e2_meta = e2.metadata();
+                                let same_content = if e1_meta.len() != e2_meta.len() {
+                                    false
+                                } else {
+                                    let mut f1 = BufReader::new(File::open(e1.path())?);
+                                    let mut f2 = BufReader::new(File::open(e2.path())?);
+                                    loop {
+                                        let s1 = f1.fill_buf()?;
+                                        let s2 = f2.fill_buf()?;
+                                        if s1.is_empty() {
+                                            break s2.is_empty();
+                                        }
+                                        let common_size = std::cmp::min(s1.len(), s2.len());
+                                        if s1[..common_size] != s2[..common_size] {
+                                            break false;
+                                        } else {
+                                            f1.consume(common_size);
+                                            f2.consume(common_size);
+                                        }
+                                    }
+                                };
+                                if !same_content {
+                                    self.process_diff(Diff::Different(dir.clone(), e1.filename()));
+                                } else if self.check_mtime
+                                    && (e1_meta.modified()? != e2_meta.modified()?)
+                                {
+                                    self.process_diff(Diff::SameButDifferentMTime(
+                                        dir.clone(),
+                                        e2.filename(),
+                                    ));
+                                }
+                            }
+                            _ => {
+                                let mut p = dir;
+                                p.push(e1.filename());
+                                bail!(
+                                    "Unimplemented filetype. File {} has type {:?}",
+                                    p.display(),
+                                    ft1
+                                );
+                            }
                         }
-                    } else {
-                        let mut p = dir;
-                        p.push(e1.filename());
-                        bail!(
-                            "Unimplemented filetype. File {} has type {:?}",
-                            p.display(),
-                            ft1
-                        );
                     }
                 }
             }
