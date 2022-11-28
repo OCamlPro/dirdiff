@@ -1,8 +1,8 @@
 [package]
 name = "dirdiff"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-authors = ["Arthur Carcano <arthur.carcano@ocamlpro.com>"]
+authors = ["Arthur Carcano <arthur.carcano@ocamlpro.com>", "Mohamed Hernouf <mohamed.hernouf@ocamlpro.com>"]
 description = """Efficiently compute the differences between two directories."""
 readme = "README.md"
 repository = "https://github.com/OCamlPro/dirdiff"

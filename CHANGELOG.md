@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2022-11-28
+
+### Features
+
+- Add an option -H, that follows symlinks when used as program arguments
+- Add an option -L that follows symlinks
+
 ## [0.1.1] - 2022-11-16
 
 ### Bug Fixes
