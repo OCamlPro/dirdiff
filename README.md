@@ -88,4 +88,4 @@ Columns are tab separated
 [Present in second dir. only]	"subdir_b"
 ```
 
-The diff is outputted to `stdout`. If symlinks are encountered, a warning will be displayed on `stderr`.
+The diff is outputted to `stdout`.
