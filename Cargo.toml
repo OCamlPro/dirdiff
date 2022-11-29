@@ -6,7 +6,7 @@ authors = ["Arthur Carcano <arthur.carcano@ocamlpro.com>", "Mohamed Hernouf <moh
 description = """Efficiently compute the differences between two directories."""
 readme = "README.md"
 repository = "https://github.com/OCamlPro/dirdiff"
-exclude = [".github","tmp","cliff.toml","dirdiff-*"]
+exclude = [".github","tmp","cliff.toml","dirdiff-*", "benchmark_results"]
 categories = ["command-line-utilities"]
 license = "MIT"
 

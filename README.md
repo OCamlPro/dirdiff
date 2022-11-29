@@ -14,6 +14,8 @@ Dirdiff efficiently computes the differences between two directories. It lists f
 
 Dirdiff is intended to work on large directories, thanks to multi-threading, and by not trying to display the diff of the files' content.
 
+It can be up to ten times faster than `diff -qNr`.
+
 Installation
 ------------
 
