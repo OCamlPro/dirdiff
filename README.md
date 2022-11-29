@@ -24,7 +24,7 @@ Precompiled binaries for (relatively recent) Linux/amd64 are available for every
 ## Install (by compiling from sources) using cargo
 
 ```
-cargo install dirdiff-ocamlpro'
+cargo install dirdiff-ocamlpro
 ```
 
 ## Building
