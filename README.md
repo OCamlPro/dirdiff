@@ -1,5 +1,8 @@
+[![Crates.io badge](https://img.shields.io/crates/v/dirdiff?style=flat-square)](https://crates.io/crates/dirdiff-ocamlpro)
 [![github release badge badge](https://img.shields.io/github/v/release/OCamlPro/dirdiff?style=flat-square)](https://github.com/OCamlPro/dirdiff/releases/latest)
 ![github downloads badge](https://img.shields.io/github/downloads/OCamlPro/dirdiff/total?style=flat-square)
+<br/>
+[<img src="resources/red-iron-sponsor.png" alt="This project is proudly sponsored by Red Iron, the Rust division of OCamlPro" width="372"/>](https://red-iron.eu/)
 
 Dirdiff
 =======
@@ -9,7 +12,7 @@ Dirdiff efficiently computes the differences between two directories. It lists f
 1. exist only in one of the directories, or
 2. exist in both directories but with different content.
 
-Dirdiff is intended to work on large directories (using multi-threading), and by not trying to display the diff of the files' content.
+Dirdiff is intended to work on large directories, thanks to multi-threading, and by not trying to display the diff of the files' content.
 
 Installation
 ------------
@@ -21,7 +24,7 @@ Precompiled binaries for (relatively recent) Linux/amd64 are available for every
 ## Install (by compiling from sources) using cargo
 
 ```
-cargo install --git 'https://github.com/OCamlPro/dirdiff'
+cargo install dirdiff-ocamlpro'
 ```
 
 ## Building
@@ -60,6 +63,12 @@ Options:
           Whether to check if the mtime is different.
 
           Only applies to file whose content is otherwise the same, and gets its specific output tag: `[Differ by mtime only]`.
+
+  -L, --follow-symlink
+          Whether to follow symlinks when comparing directories' content
+
+  -H
+          Whether to follow symlinks for program's arguments
 
   -h, --help
           Print help information (use `-h` for a summary)

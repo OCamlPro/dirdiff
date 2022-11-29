@@ -108,7 +108,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirdiff"
+name = "dirdiff-ocamlpro"
 version = "0.2.0"
 dependencies = [
  "anyhow",
